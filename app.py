@@ -2,44 +2,53 @@ import streamlit as st
 import google.generativeai as genai
 from pypdf import PdfReader
 from docx import Document
-import io
 
-# Cấu hình giao diện
-st.set_page_config(page_title="AI Hành Chính", layout="wide")
-st.title("🏛️ Phân tích Chỉ đạo Văn bản Hành chính")
+# 1. Cấu hình giao diện App
+st.set_page_config(page_title="AI Hành Chính", page_icon="🏛️")
+st.title("🏛️ Trợ lý Phân tích Văn bản Hành chính")
 
-# Lấy API Key từ Secrets của Streamlit
-api_key = st.secrets["GEMINI_API_KEY"]
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 2. Kết nối Gemini API (Lấy key từ Secrets để bảo mật)
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=api_key)
+    # Sử dụng model 'gemini-1.5-flash' hoặc 'models/gemini-1.5-flash'
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error("Chưa cấu hình API Key trong phần Secrets!")
 
-def read_pdf(file):
-    reader = PdfReader(file)
-    return " ".join([page.extract_text() for page in reader.pages])
+# 3. Hàm đọc nội dung file
+def get_text_from_any(uploaded_file):
+    text = ""
+    if uploaded_file.type == "application/pdf":
+        reader = PdfReader(uploaded_file)
+        for page in reader.pages:
+            text += page.extract_text()
+    elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        doc = Document(uploaded_file)
+        text = "\n".join([para.text for para in doc.paragraphs])
+    return text
 
-def read_docx(file):
-    doc = Document(file)
-    return " ".join([para.text for para in doc.paragraphs])
-
-uploaded_file = st.file_uploader("Tải lên file PDF hoặc Word", type=["pdf", "docx"])
+# 4. Giao diện Upload
+uploaded_file = st.file_uploader("Tải lên văn bản (PDF hoặc Word)", type=["pdf", "docx"])
 
 if uploaded_file:
-    with st.spinner('Đang đọc dữ liệu...'):
-        if uploaded_file.type == "application/pdf":
-            content = read_pdf(uploaded_file)
-        else:
-            content = read_docx(uploaded_file)
-            
-    if st.button("Trích xuất nội dung chỉ đạo"):
+    with st.spinner('Đang đọc tài liệu...'):
+        content = get_text_from_any(uploaded_file)
+    
+    if st.button("Bắt đầu phân tích chỉ đạo"):
         prompt = f"""
-        Bạn là một chuyên gia hành chính. Hãy đọc văn bản sau và trích xuất các thông tin dưới dạng bảng:
-        - STT
-        - Nội dung chỉ đạo/Nhiệm vụ cụ thể
-        - Đơn vị/Cá nhân chủ trì thực hiện
-        - Thời hạn hoàn thành (nếu không có thì ghi 'Theo quy định')
-        - Ghi chú (Yêu cầu kèm theo nếu có)
+        Bạn là một trợ lý hành chính chuyên nghiệp. Hãy đọc văn bản sau và trích xuất:
+        1. Tóm tắt ngắn gọn nội dung văn bản.
+        2. Danh sách các nhiệm vụ/chỉ đạo cụ thể (Trình bày dạng bảng: STT | Nhiệm vụ | Đơn vị thực hiện | Thời hạn).
+        3. Các lưu ý quan trọng khác (nếu có).
         
-        Văn bản: {content}
+        Nội dung văn bản:
+        {content}
         """
-        response = model.generate_content(prompt)
-        st.markdown(response.text)
+        
+        try:
+            response = model.generate_content(prompt)
+            st.markdown("### 📝 Kết quả phân tích")
+            st.markdown(response.text)
+        except Exception as e:
+            st.error(f"Lỗi khi gọi AI: {e}")
