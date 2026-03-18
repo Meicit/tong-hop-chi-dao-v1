@@ -6,120 +6,122 @@ import io
 
 # --- 1. CẤU HÌNH GIAO DIỆN ---
 st.set_page_config(
-    page_title="AI Phân Tích Văn Bản Hành Chính",
+    page_title="AI Hành Chính Việt Nam",
     page_icon="🏛️",
     layout="wide"
 )
 
-# Sửa lỗi unsafe_allow_html ở đây
+# Tùy chỉnh giao diện bằng CSS
 st.markdown("""
     <style>
-    .main {
-        background-color: #f5f7f9;
-    }
+    .main { background-color: #f8f9fa; }
     .stButton>button {
         width: 100%;
-        border-radius: 5px;
+        border-radius: 8px;
         height: 3em;
-        background-color: #007bff;
+        background-color: #1E88E5;
         color: white;
+        font-weight: bold;
     }
+    .stTextArea>div>div>textarea { font-size: 14px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🏛️ Hệ thống Trích xuất Chỉ đạo Văn bản")
-st.info("Hỗ trợ đọc file PDF và Word để lập bảng nhiệm vụ tự động.")
+st.title("🏛️ Hệ thống Trích xuất & Tổng hợp Chỉ đạo")
+st.caption("Công cụ hỗ trợ cán bộ hành chính bóc tách nhiệm vụ từ văn bản PDF/Word")
 
-# --- 2. CẤU HÌNH AI (GEMINI) ---
-try:
-    # Kiểm tra API Key trong Secrets
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        genai.configure(api_key=api_key)
-        # Sử dụng model flash mới nhất
-   model = genai.GenerativeModel('gemini-1.5-flash')
-    else:
-        st.error("❌ Thiếu API Key! Hãy vào Settings > Secrets và thêm: GEMINI_API_KEY = 'your_key_here'")
+# --- 2. CẤU HÌNH AI (KHẮC PHỤC LỖI 404) ---
+def initialize_ai():
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("❌ Thiếu GEMINI_API_KEY trong Secrets!")
         st.stop()
-except Exception as e:
-    st.error(f"⚠️ Lỗi khởi tạo AI: {e}")
+    
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    
+    # Chiến lược chọn Model: Thử Flash trước, nếu lỗi thì thử Pro
+    model_options = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+    
+    for model_name in model_options:
+        try:
+            model = genai.GenerativeModel(model_name)
+            # Thử gọi một lệnh kiểm tra nhỏ
+            return model
+        except:
+            continue
+    st.error("❌ Không thể kết nối với bất kỳ Model Gemini nào. Vui lòng kiểm tra lại API Key.")
     st.stop()
 
-# --- 3. CÁC HÀM XỬ LÝ FILE ---
-def extract_text_from_pdf(file):
+model = initialize_ai()
+
+# --- 3. HÀM XỬ LÝ VĂN BẢN ---
+def extract_text(uploaded_file):
+    text = ""
     try:
-        reader = PdfReader(file)
-        text = ""
-        for page in reader.pages:
-            content = page.extract_text()
-            if content:
-                text += content + "\n"
-        return text
-    except Exception as e:
-        return f"Lỗi đọc file PDF: {e}"
-
-def extract_text_from_docx(file):
-    try:
-        doc = Document(file)
-        return "\n".join([para.text for para in doc.paragraphs])
-    except Exception as e:
-        return f"Lỗi đọc file Word: {e}"
-
-# --- 4. GIAO DIỆN NGƯỜI DÙNG ---
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.subheader("📁 Tải văn bản")
-    uploaded_file = st.file_uploader("Chọn file (PDF hoặc DOCX)", type=["pdf", "docx"])
-    
-    if uploaded_file:
-        file_type = uploaded_file.type
-        st.success(f"Đã tải file: {uploaded_file.name}")
-        
-        with st.spinner("Đang trích xuất văn bản..."):
-            if "pdf" in file_type:
-                raw_text = extract_text_from_pdf(uploaded_file)
-            else:
-                raw_text = extract_text_from_docx(uploaded_file)
-        
-        if len(raw_text.strip()) < 10:
-            st.warning("⚠️ Không tìm thấy nội dung văn bản (có thể là file ảnh scan hoặc file trống).")
-            raw_text = ""
+        if uploaded_file.type == "application/pdf":
+            reader = PdfReader(uploaded_file)
+            for page in reader.pages:
+                content = page.extract_text()
+                if content: text += content + "\n"
         else:
-            st.text_area("Nội dung gốc (trích đoạn):", raw_text[:800] + "...", height=250)
+            doc = Document(uploaded_file)
+            text = "\n".join([para.text for para in doc.paragraphs])
+        return text.strip()
+    except Exception as e:
+        st.error(f"Lỗi đọc file: {e}")
+        return ""
 
-with col2:
-    st.subheader("📋 Kết quả phân tích")
+# --- 4. GIAO DIỆN CHÍNH ---
+col_left, col_right = st.columns([1, 1.5])
+
+with col_left:
+    st.subheader("📁 Tải văn bản")
+    file = st.file_uploader("Kéo thả file PDF hoặc Word vào đây", type=["pdf", "docx"])
     
-    if uploaded_file and len(raw_text) > 10:
-        if st.button("🚀 Bắt đầu Phân tích & Trích xuất"):
-            with st.spinner("AI đang xử lý chỉ đạo..."):
-                prompt = f"""
-                Bạn là một trợ lý thư ký hành chính nhà nước. 
-                Nhiệm vụ của bạn là đọc văn bản sau và lọc ra các nội dung chỉ đạo trọng tâm.
-                
-                YÊU CẦU TRÌNH BÀY:
-                1. Tóm tắt ngắn gọn mục đích văn bản.
-                2. Danh sách nhiệm vụ cụ thể dưới dạng BẢNG gồm: STT | Nội dung nhiệm vụ | Đơn vị chủ trì | Thời hạn.
-                3. Các lưu ý quan trọng hoặc mốc thời gian cần nhấn mạnh.
+    if file:
+        with st.spinner("Đang đọc nội dung..."):
+            raw_content = extract_text(file)
+        
+        if raw_content:
+            st.success(f"✅ Đã đọc xong: {file.name}")
+            st.text_area("Xem trước nội dung văn bản:", raw_content, height=350)
+        else:
+            st.warning("⚠️ Văn bản trống hoặc là ảnh scan không có lớp chữ.")
 
-                NỘI DUNG VĂN BẢN:
-                {raw_text}
+with col_right:
+    st.subheader("📋 Kết quả trích xuất")
+    
+    if file and raw_content:
+        if st.button("🚀 BẮT ĐẦU PHÂN TÍCH CHỈ ĐẠO"):
+            with st.spinner("AI đang xử lý ngôn ngữ hành chính..."):
+                prompt = f"""
+                Bạn là một chuyên gia phân tích văn bản hành chính nhà nước Việt Nam.
+                Hãy đọc văn bản dưới đây và trích xuất thông tin theo yêu cầu:
+
+                1. TÓM TẮT: Mục đích chính và nội dung cốt lõi của văn bản.
+                2. DANH MỤC NHIỆM VỤ: Trình bày dạng bảng Markdown gồm:
+                   | STT | Nội dung chỉ đạo/Nhiệm vụ cụ thể | Đơn vị chủ trì | Thời hạn hoàn thành |
+                3. LƯU Ý: Các điều khoản về báo cáo, phối hợp hoặc mốc thời gian quan trọng khác.
+
+                VĂN BẢN CẦN PHÂN TÍCH:
+                {raw_content}
                 """
                 
                 try:
                     response = model.generate_content(prompt)
+                    st.markdown("---")
                     st.markdown(response.text)
                     
+                    # Nút tải kết quả
                     st.download_button(
-                        label="📥 Tải kết quả (.txt)",
+                        label="📥 Tải kết quả về máy",
                         data=response.text,
-                        file_name=f"phan_tich_{uploaded_file.name}.txt",
+                        file_name=f"Trich_xuat_{file.name}.txt",
                         mime="text/plain"
                     )
                 except Exception as e:
-                    st.error(f"❌ Lỗi khi gọi AI: {e}")
+                    st.error(f"Lỗi AI: {str(e)}")
+                    st.info("Mẹo: Nếu lỗi 404 kéo dài, hãy thử tạo lại API Key mới tại Google AI Studio.")
 
 # --- 5. CHÂN TRANG ---
 st.divider()
-st.caption("Công cụ hỗ trợ tổng hợp chỉ đạo văn bản hành chính.")
+st.markdown("<p style='text-align: center; color: gray;'>Hỗ trợ công tác tổng hợp chỉ đạo điều hành v1.0</p>", unsafe_allow_html=True)
