@@ -11,6 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
+# Sửa lỗi unsafe_allow_html ở đây
 st.markdown("""
     <style>
     .main {
@@ -24,25 +25,24 @@ st.markdown("""
         color: white;
     }
     </style>
-    """, unsafe_allow_stdio=True)
+    """, unsafe_allow_html=True)
 
 st.title("🏛️ Hệ thống Trích xuất Chỉ đạo Văn bản")
 st.info("Hỗ trợ đọc file PDF và Word để lập bảng nhiệm vụ tự động.")
 
 # --- 2. CẤU HÌNH AI (GEMINI) ---
 try:
-    # Lấy API Key từ Secrets của Streamlit Cloud
+    # Kiểm tra API Key trong Secrets
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
-        
-        # Sử dụng tên model ổn định nhất để tránh lỗi 404
+        # Sử dụng model flash mới nhất
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
     else:
-        st.error("❌ Thiếu API Key! Hãy cấu hình GEMINI_API_KEY trong phần Secrets của Streamlit.")
+        st.error("❌ Thiếu API Key! Hãy vào Settings > Secrets và thêm: GEMINI_API_KEY = 'your_key_here'")
         st.stop()
 except Exception as e:
-    st.error(f"⚠️ Lỗi cấu hình hệ thống: {e}")
+    st.error(f"⚠️ Lỗi khởi tạo AI: {e}")
     st.stop()
 
 # --- 3. CÁC HÀM XỬ LÝ FILE ---
@@ -83,47 +83,43 @@ with col1:
                 raw_text = extract_text_from_docx(uploaded_file)
         
         if len(raw_text.strip()) < 10:
-            st.warning("⚠️ Không tìm thấy nội dung văn bản (có thể là file ảnh scan).")
+            st.warning("⚠️ Không tìm thấy nội dung văn bản (có thể là file ảnh scan hoặc file trống).")
+            raw_text = ""
         else:
-            st.text_area("Nội dung gốc (trích đoạn):", raw_text[:500] + "...", height=200)
+            st.text_area("Nội dung gốc (trích đoạn):", raw_text[:800] + "...", height=250)
 
 with col2:
     st.subheader("📋 Kết quả phân tích")
     
-    if uploaded_file and st.button("🚀 Bắt đầu Phân tích & Trích xuất"):
-        with st.spinner("AI đang xử lý chỉ đạo..."):
-            prompt = f"""
-            Bạn là một trợ lý thư ký hành chính nhà nước dày dạn kinh nghiệm. 
-            Nhiệm vụ của bạn là đọc văn bản sau và lọc ra các nội dung chỉ đạo trọng tâm.
-            
-            HÃY TRÌNH BÀY THEO CẤU TRÚC SAU:
-            1. Tóm tắt ngắn gọn mục đích văn bản (2-3 dòng).
-            2. Danh sách nhiệm vụ cụ thể dưới dạng BẢNG gồm các cột:
-               - STT
-               - Nội dung chỉ đạo/Nhiệm vụ
-               - Đơn vị/Cá nhân thực hiện
-               - Thời hạn hoàn thành (Nếu không có ghi 'Thường xuyên' hoặc 'Theo quy định')
-            3. Các mốc thời gian quan trọng cần lưu ý (dạng danh sách).
-
-            NỘI DUNG VĂN BẢN:
-            {raw_text}
-            """
-            
-            try:
-                response = model.generate_content(prompt)
-                st.markdown(response.text)
+    if uploaded_file and len(raw_text) > 10:
+        if st.button("🚀 Bắt đầu Phân tích & Trích xuất"):
+            with st.spinner("AI đang xử lý chỉ đạo..."):
+                prompt = f"""
+                Bạn là một trợ lý thư ký hành chính nhà nước. 
+                Nhiệm vụ của bạn là đọc văn bản sau và lọc ra các nội dung chỉ đạo trọng tâm.
                 
-                # Nút copy/tải về (giả lập đơn giản)
-                st.download_button(
-                    label="📥 Tải kết quả về máy",
-                    data=response.text,
-                    file_name=f"ket_qua_phan_tich_{uploaded_file.name}.txt",
-                    mime="text/plain"
-                )
-            except Exception as e:
-                st.error(f"❌ Lỗi khi gọi AI: {e}")
-                st.info("Mẹo: Hãy kiểm tra xem API Key có bị giới hạn vùng địa lý không.")
+                YÊU CẦU TRÌNH BÀY:
+                1. Tóm tắt ngắn gọn mục đích văn bản.
+                2. Danh sách nhiệm vụ cụ thể dưới dạng BẢNG gồm: STT | Nội dung nhiệm vụ | Đơn vị chủ trì | Thời hạn.
+                3. Các lưu ý quan trọng hoặc mốc thời gian cần nhấn mạnh.
+
+                NỘI DUNG VĂN BẢN:
+                {raw_text}
+                """
+                
+                try:
+                    response = model.generate_content(prompt)
+                    st.markdown(response.text)
+                    
+                    st.download_button(
+                        label="📥 Tải kết quả (.txt)",
+                        data=response.text,
+                        file_name=f"phan_tich_{uploaded_file.name}.txt",
+                        mime="text/plain"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi gọi AI: {e}")
 
 # --- 5. CHÂN TRANG ---
 st.divider()
-st.caption("Ứng dụng hỗ trợ công tác hành chính - Phát triển bởi Gemini AI.")
+st.caption("Công cụ hỗ trợ tổng hợp chỉ đạo văn bản hành chính.")
