@@ -37,7 +37,7 @@ try:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
         # Sử dụng model flash mới nhất
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+   model = genai.GenerativeModel('gemini-1.5-flash')
     else:
         st.error("❌ Thiếu API Key! Hãy vào Settings > Secrets và thêm: GEMINI_API_KEY = 'your_key_here'")
         st.stop()
