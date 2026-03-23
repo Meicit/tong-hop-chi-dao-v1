@@ -1,136 +1,125 @@
 import streamlit as st
 from google import genai
 import pandas as pd
-import io, requests, re
+import io, re
 from pypdf import PdfReader
 from docx import Document
+from docx.shared import Inches
 
-# --- 1. CẤU HÌNH HỆ THỐNG ---
-st.set_page_config(page_title="AI Binh Hung 2026", layout="wide", page_icon="🏛️")
-st.title("📊 Hệ thống Trích xuất & Báo cáo Chỉ đạo")
+# --- 1. CẤU HÌNH ---
+st.set_page_config(page_title="AI Trích xuất Văn bản", layout="wide", page_icon="📝")
+st.title("🏛️ Hệ thống Trích xuất Chỉ đạo & Xuất văn bản")
 
-# Kiểm tra các khóa bảo mật trong Secrets
+# Khởi tạo AI Client
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("❌ Thiếu GEMINI_API_KEY trong Secrets!")
     st.stop()
 
-# Khởi tạo AI Client
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# Khởi tạo bộ nhớ tạm (Session State)
-if 'raw_text' not in st.session_state:
-    st.session_state['raw_text'] = None
-if 'df_data' not in st.session_state:
-    st.session_state['df_data'] = None
+# Khởi tạo bộ nhớ tạm
+if 'raw_output' not in st.session_state:
+    st.session_state['raw_output'] = None
+if 'df_result' not in st.session_state:
+    st.session_state['df_result'] = None
 
-# --- 2. CÁC HÀM XỬ LÝ ---
+# --- 2. HÀM HỖ TRỢ ---
 
-def extract_text_from_file(file):
-    """Đọc văn bản từ PDF hoặc Word"""
+def extract_text(file):
     try:
         if file.type == "application/pdf":
-            reader = PdfReader(file)
-            return "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
+            return "\n".join([p.extract_text() for p in PdfReader(file).pages if p.extract_text()])
         else:
-            doc = Document(file)
-            return "\n".join([p.text for p in doc.paragraphs])
+            return "\n".join([p.text for p in Document(file).paragraphs])
     except Exception as e:
         st.error(f"Lỗi đọc file: {e}")
         return ""
 
-def parse_markdown_to_df(md_text):
-    """Chuyển bảng Markdown của AI thành bảng Excel chuẩn"""
+def parse_md_to_df(md_text):
+    """Chuyển bảng Markdown thành DataFrame để xuất Excel"""
     try:
         lines = [l.strip() for l in md_text.split('\n') if '|' in l]
-        # Loại bỏ dòng ngăn cách tiêu đề |---|---|
         data_lines = [l for l in lines if not re.match(r'^[|:\-\s]+$', l)]
-        if len(data_lines) < 2: 
-            return pd.DataFrame([{"Nội dung": md_text}])
-        
+        if len(data_lines) < 2: return pd.DataFrame([{"Nội dung": md_text}])
         cols = [c.strip() for c in data_lines[0].split('|') if c.strip()]
-        rows = []
-        for l in data_lines[1:]:
-            row = [c.strip() for c in l.split('|') if c.strip()]
-            if len(row) == len(cols):
-                rows.append(row)
-        return pd.DataFrame(rows, columns=cols)
+        rows = [[c.strip() for c in l.split('|') if c.strip()] for l in data_lines[1:]]
+        return pd.DataFrame([r for r in rows if len(r) == len(cols)], columns=cols)
     except:
         return pd.DataFrame([{"Kết quả": md_text}])
 
-def send_to_telegram(text):
-    """Gửi tin nhắn qua Telegram Bot"""
-    token = st.secrets.get("TELE_TOKEN")
-    chat_id = st.secrets.get("TELE_CHAT_ID")
-    if not token or not chat_id:
-        return None
+def create_word_file(df):
+    """Tạo file Word từ DataFrame kết quả"""
+    doc = Document()
+    doc.add_heading('DANH MỤC NHIỆM VỤ, CHỈ ĐẠO', 0)
     
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id, 
-        "text": f"📢 *CÓ CHỈ ĐẠO MỚI:* \n\n{text}", 
-        "parse_mode": "Markdown"
-    }
-    return requests.post(url, json=payload)
+    table = doc.add_table(rows=1, cols=len(df.columns))
+    table.style = 'Table Grid'
+    
+    # Header
+    hdr_cells = table.rows[0].cells
+    for i, col_name in enumerate(df.columns):
+        hdr_cells[i].text = col_name
+        
+    # Data
+    for _, row in df.iterrows():
+        row_cells = table.add_row().cells
+        for i, value in enumerate(row):
+            row_cells[i].text = str(value)
+            
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
 
-# --- 3. GIAO DIỆN NGƯỜI DÙNG ---
+# --- 3. GIAO DIỆN ---
 
-uploaded_file = st.file_uploader("Tải văn bản chỉ đạo (PDF, DOCX)", type=["pdf", "docx"])
+uploaded_file = st.file_uploader("Tải lên file văn bản (PDF hoặc DOCX)", type=["pdf", "docx"])
 
 if uploaded_file:
-    if st.button("🚀 BẮT ĐẦU TRÍCH XUẤT"):
-        raw_content = extract_text_from_file(uploaded_file)
-        
-        if raw_content:
-            with st.spinner("AI đang quét chi tiết văn bản..."):
+    if st.button("🚀 BẮT ĐẦU PHÂN TÍCH"):
+        content = extract_text(uploaded_file)
+        if content:
+            with st.spinner("AI đang bóc tách chỉ đạo..."):
                 try:
-                    # Prompt yêu cầu trích xuất chi tiết
                     prompt = (
-                        "Bạn là trợ lý hành chính. Hãy trích xuất TẤT CẢ các nhiệm vụ trong văn bản sau. "
-                        "Yêu cầu: Liệt kê đầy đủ, không tóm tắt, trình bày duy nhất dạng bảng Markdown: "
+                        "Bạn là trợ lý hành chính chuyên nghiệp. Hãy trích xuất TẤT CẢ nhiệm vụ từ văn bản. "
+                        "Yêu cầu: Không tóm tắt, liệt kê đầy đủ từng nhiệm vụ vào bảng Markdown: "
                         "STT | Nhiệm vụ | Đơn vị thực hiện | Thời hạn.\n\n"
-                        f"Nội dung văn bản:\n{raw_content[:15000]}"
+                        f"Nội dung:\n{content[:15000]}"
                     )
+                    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
                     
-                    response = client.models.generate_content(
-                        model="gemini-1.5-flash", 
-                        contents=prompt
-                    )
-                    
-                    # Lưu vào Session State để không bị mất khi bấm nút khác
-                    st.session_state['raw_text'] = response.text
-                    st.session_state['df_data'] = parse_markdown_to_df(response.text)
-                    
+                    st.session_state['raw_output'] = response.text
+                    st.session_state['df_result'] = parse_md_to_df(response.text)
                 except Exception as e:
-                    st.error(f"Lỗi gọi AI: {e}")
+                    st.error(f"Lỗi AI: {e}")
 
-# Hiển thị kết quả nếu đã có dữ liệu
-if st.session_state['raw_text']:
+# Hiển thị và Tải về
+if st.session_state['raw_output']:
     st.divider()
-    st.markdown("### 📋 Kết quả trích xuất chi tiết")
-    st.markdown(st.session_state['raw_text'])
+    st.markdown("### ✅ Kết quả trích xuất")
+    st.markdown(st.session_state['raw_output'])
     
-    # Khu vực các nút chức năng
-    col1, col2 = st.columns(2)
+    st.subheader("📥 Tải dữ liệu về máy")
+    c1, c2 = st.columns(2)
     
-    with col1:
-        # Nút tải file Excel
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-            st.session_state['df_data'].to_excel(writer, index=False, sheet_name="ChiDao")
-        
+    with c1:
+        # Xuất Excel
+        excel_bio = io.BytesIO()
+        with pd.ExcelWriter(excel_bio, engine='openpyxl') as writer:
+            st.session_state['df_result'].to_excel(writer, index=False, sheet_name="ChiDao")
         st.download_button(
-            label="📥 Tải về file Excel (Cột chuẩn)",
-            data=buf.getvalue(),
+            label="📊 Tải file Excel (.xlsx)",
+            data=excel_bio.getvalue(),
             file_name=f"Trich_xuat_{uploaded_file.name}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
-    with col2:
-        # Nút gửi Telegram
-        if st.button("📲 GỬI BÁO CÁO QUA TELEGRAM"):
-            res = send_to_telegram(st.session_state['raw_text'])
-            if res and res.status_code == 200:
-                st.success("🚀 Đã gửi Telegram thành công!")
-                st.balloons()
-            else:
-                st.error("❌ Lỗi: Kiểm tra lại TELE_TOKEN và TELE_CHAT_ID trong Secrets.")
+    with c2:
+        # Xuất Word
+        word_data = create_word_file(st.session_state['df_result'])
+        st.download_button(
+            label="📄 Tải file Word (.docx)",
+            data=word_data,
+            file_name=f"Bao_cao_{uploaded_file.name}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
